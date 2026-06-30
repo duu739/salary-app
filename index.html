@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>薪資計算儀表板</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0f172a; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // 常數設定 (將投保級距 11100 直接寫死為常數)
+    const FULL_PAY = 470;
+    const INTERN_PAY = 300;
+    const INSURED_BRACKET = 11100;     // 寫死兼職最低級距 11,100 元
+    const LABOR_INSURANCE_RATE = 0.024; // 勞保自付額比例 (約 2.4%)
+    const PENSION_RATE = 0.06;          // 勞退自提 6%
+
+    function App() {
+      const todayDate = new Date().toISOString().split('T')[0];
+      const [selectedDate, setSelectedDate] = useState(todayDate);
+      const [fullCount, setFullCount] = useState(0);
+      const [internCount, setInternCount] = useState(0);
+      const [modalDate, setModalDate] = useState(null);
+
+      // --- Local Storage 實作區塊 ---
+      const [records, setRecords] = useState(() => {
+        const savedRecords = localStorage.getItem('salaryRecords');
+        return savedRecords ? JSON.parse(savedRecords) : {};
+      });
+
+      useEffect(() => {
+        localStorage.setItem('salaryRecords', JSON.stringify(records));
+      }, [records]);
+      // ----------------------------
+
+      // 解析目前左側選擇的年與月，讓日曆跟著連動
+      const selectedYear = new Date(selectedDate).getFullYear();
+      const selectedMonth = new Date(selectedDate).getMonth(); // 0-11
+
+      // 切換日期時更新左側輸入框的數字
+      useEffect(() => {
+        if (records[selectedDate]) {
+          setFullCount(records[selectedDate].full);
+          setInternCount(records[selectedDate].intern);
+        } else {
+          setFullCount(0);
+          setInternCount(0);
+        }
+      }, [selectedDate, records]);
+
+      // 儲存紀錄
+      const handleSave = () => {
+        setRecords(prev => ({
+          ...prev,
+          [selectedDate]: { full: Number(fullCount), intern: Number(internCount) }
+        }));
+      };
+
+      // 計算「所選月份」的總計
+      let totalFull = 0;
+      let totalIntern = 0;
+
+      Object.keys(records).forEach(dateStr => {
+        const d = new Date(dateStr);
+        if (d.getMonth() === selectedMonth && d.getFullYear() === selectedYear) {
+          totalFull += records[dateStr].full;
+          totalIntern += records[dateStr].intern;
+        }
+      });
+
+      const grossPay = (totalFull * FULL_PAY) + (totalIntern * INTERN_PAY);
+      
+      // 計算勞保與勞退扣款 (若應發總額大於 0，才去扣固定級距算的金額)
+      const laborInsuranceDeduction = grossPay > 0 ? Math.round(INSURED_BRACKET * LABOR_INSURANCE_RATE) : 0;
+      const pensionDeduction = grossPay > 0 ? Math.round(INSURED_BRACKET * PENSION_RATE) : 0;
+      const netPay = grossPay > 0 ? (grossPay - laborInsuranceDeduction - pensionDeduction) : 0;
+
+      // 當日薪資試算 (左側)
+      const dailyGross = (fullCount * FULL_PAY) + (internCount * INTERN_PAY);
+
+      // 匯出 CSV 功能
+      const exportCSV = () => {
+        let csvContent = "data:text/csv;charset=utf-8,日期,全薪堂數,實習堂數,當日總額\n";
+        Object.keys(records).sort().forEach(date => {
+          const r = records[date];
+          const dailyTotal = (r.full * FULL_PAY) + (r.intern * INTERN_PAY);
+          csvContent += `${date},${r.full},${r.intern},${dailyTotal}\n`;
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `薪資明細_${selectedYear}_${selectedMonth + 1}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      // 產生日曆熱力圖資料
+      const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+      const daysInMonth = getDaysInMonth(selectedYear, selectedMonth);
+      const firstDayIndex = new Date(selectedYear, selectedMonth, 1).getDay();
+      
+      const calendarCells = [];
+      for (let i = 0; i < firstDayIndex; i++) {
+        calendarCells.push(<div key={`empty-${i}`} className="w-10 h-10"></div>);
+      }
+      
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const dayRecord = records[dateStr];
+        const dayTotal = dayRecord ? (dayRecord.full * FULL_PAY) + (dayRecord.intern * INTERN_PAY) : 0;
+        
+        let bgColor = "bg-slate-800 hover:bg-slate-700 border border-slate-700/50";
+        if (dayTotal > 0 && dayTotal <= 1000) bgColor = "bg-blue-400 hover:bg-blue-500 shadow-sm shadow-blue-500/20";
+        else if (dayTotal > 1000 && dayTotal <= 2000) bgColor = "bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/30";
+        else if (dayTotal > 2000) bgColor = "bg-blue-800 hover:bg-blue-900 shadow-lg shadow-blue-800/40";
+
+        const textColor = dayTotal > 0 ? "text-white" : "text-slate-500";
+
+        calendarCells.push(
+          <div 
+            key={day} 
+            className={`w-10 h-10 rounded-lg cursor-pointer transition-all duration-200 flex items-center justify-center text-xs font-semibold ${bgColor} ${textColor}`}
+            title={`${dateStr} | 收入: $${dayTotal}`}
+            onClick={() => setModalDate(dateStr)}
+          >
+            {day}
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen p-8 max-w-6xl mx-auto text-slate-100">
+          <div className="flex justify-between items-center mb-8">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-white">薪資計算儀表板</h1>
+              <p className="text-sm text-slate-400 mt-1">目前檢視月份：{selectedYear} 年 {selectedMonth + 1} 月</p>
+            </div>
+            <button onClick={exportCSV} className="bg-blue-600 text-white font-medium px-4 py-2 rounded-lg shadow-lg shadow-blue-600/20 hover:bg-blue-500 transition">
+              📥 匯出當月明細 (CSV)
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* 左側：輸入區 */}
+            <div className="bg-slate-900/60 backdrop-blur-xl p-6 rounded-2xl border border-slate-800 shadow-xl h-fit">
+              <h2 className="text-xl font-semibold mb-6 text-slate-200 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-500"></span> 每日紀錄
+              </h2>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-400 mb-1">選擇日期</label>
+                <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} 
+                  className="w-full bg-slate-800 border-slate-700 text-white rounded-lg p-2 border focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"/>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-400 mb-1">全薪堂數 ($470)</label>
+                <input type="number" min="0" value={fullCount} onChange={(e) => setFullCount(e.target.value)} 
+                  className="w-full bg-slate-800 border-slate-700 text-white rounded-lg p-2 border focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"/>
+              </div>
+
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-slate-400 mb-1">實習堂數 ($300)</label>
+                <input type="number" min="0" value={internCount} onChange={(e) => setInternCount(e.target.value)} 
+                  className="w-full bg-slate-800 border-slate-700 text-white rounded-lg p-2 border focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"/>
+              </div>
+
+              <div className="bg-blue-950/40 p-4 rounded-lg mb-6 border border-blue-900/40">
+                <p className="text-sm text-blue-400 font-medium">今日薪資試算</p>
+                <p className="text-3xl font-bold text-blue-400">${dailyGross.toLocaleString()}</p>
+              </div>
+
+              <button onClick={handleSave} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition-all active:scale-[0.98]">
+                💾 儲存 / 更新紀錄
+              </button>
+            </div>
+
+            {/* 右側：日曆與總計 */}
+            <div className="lg:col-span-2 flex flex-col gap-8">
+              
+              {/* 右側上：熱力圖 (透過 mx-auto 與 max-w-md 限制大小並置中) */}
+              <div className="bg-slate-900/60 backdrop-blur-xl p-6 rounded-2xl border border-slate-800 shadow-xl w-full">
+                <h2 className="text-xl font-semibold mb-6 text-slate-200 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span> {selectedMonth + 1} 月出勤熱力圖
+                </h2>
+                <div className="max-w-xs sm:max-w-md mx-auto">
+                  <div className="grid grid-cols-7 gap-2 justify-items-center">
+                    {['日', '一', '二', '三', '四', '五', '六'].map(d => (
+                      <div key={d} className="w-10 text-center text-sm text-slate-500 font-medium pb-2">{d}</div>
+                    ))}
+                    {calendarCells}
+                  </div>
+                </div>
+                <div className="flex items-center justify-center gap-2 text-sm text-slate-400 mt-6 pt-4 border-t border-slate-800/60">
+                  <span>圖例 (少 ➡️ 多)：</span>
+                  <div className="w-4 h-4 bg-slate-800 rounded-sm border border-slate-700"></div>
+                  <div className="w-4 h-4 bg-blue-400 rounded-sm"></div>
+                  <div className="w-4 h-4 bg-blue-600 rounded-sm"></div>
+                  <div className="w-4 h-4 bg-blue-800 rounded-sm"></div>
+                </div>
+              </div>
+
+              {/* 右側下：總計 */}
+              <div className="bg-slate-900/60 backdrop-blur-xl p-6 rounded-2xl border border-slate-800 shadow-xl relative overflow-hidden">
+                <h2 className="text-xl font-semibold mb-6 text-slate-200 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span> {selectedMonth + 1} 月薪資總計
+                </h2>
+                
+                <div className="space-y-3 mb-6">
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>全薪總計 ({totalFull} 堂)</span>
+                    <span className="font-mono">${(totalFull * FULL_PAY).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>實習總計 ({totalIntern} 堂)</span>
+                    <span className="font-mono">${(totalIntern * INTERN_PAY).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-lg font-medium text-slate-100 pt-2 border-t border-dashed border-slate-700">
+                    <span>應發總額</span>
+                    <span className="font-mono text-blue-400">${grossPay.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3 mb-6 bg-red-950/20 p-4 rounded-lg border border-red-900/30">
+                  <div className="flex justify-between items-center text-red-400 text-sm">
+                    <span>➖ 勞保自付扣款</span>
+                    <span className="font-mono">- ${laborInsuranceDeduction.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-red-400 text-sm">
+                    <span>➖ 勞退自提</span>
+                    <span className="font-mono">- ${pensionDeduction.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-end bg-blue-600 text-white p-5 rounded-xl shadow-lg shadow-blue-600/10">
+                  <span className="text-lg opacity-90 font-medium">👑 實領金額</span>
+                  <span className="text-4xl font-bold font-mono">${netPay.toLocaleString()}</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* 當日明細彈窗 Modal */}
+          {modalDate && (
+            <div className="fixed inset-0 bg-slate-950/80 flex items-center justify-center backdrop-blur-md z-50">
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl w-80">
+                <h3 className="text-lg font-bold mb-4 text-white">日期：{modalDate}</h3>
+                <div className="space-y-2 mb-6">
+                  <p className="flex justify-between text-slate-300">
+                    <span>全薪堂數：</span>
+                    <span className="font-medium text-slate-100">{records[modalDate]?.full || 0} 堂</span>
+                  </p>
+                  <p className="flex justify-between text-slate-300">
+                    <span>實習堂數：</span>
+                    <span className="font-medium text-slate-100">{records[modalDate]?.intern || 0} 堂</span>
+                  </p>
+                  <div className="pt-2 mt-2 border-t border-slate-800 flex justify-between font-bold text-blue-400 text-lg">
+                    <span>當日總計：</span>
+                    <span className="font-mono">${((records[modalDate]?.full || 0) * FULL_PAY + (records[modalDate]?.intern || 0) * INTERN_PAY).toLocaleString()}</span>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => { setSelectedDate(modalDate); setModalDate(null); }} className="flex-1 bg-blue-600/20 text-blue-400 py-2 rounded-lg font-medium hover:bg-blue-600/30 transition">修改</button>
+                  <button onClick={() => setModalDate(null)} className="flex-1 bg-slate-800 text-slate-400 py-2 rounded-lg font-medium hover:bg-slate-700 transition">關閉</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
